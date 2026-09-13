@@ -136,23 +136,26 @@ fn authorization_action(
     no_pass: bool,
     passkey_count: usize,
 ) -> AuthorizationAction {
-    // If there are no credentials stored for this RP, always report NoCredentials
-    // so caBLE hybrid transport or another authenticator can handle the request.
-    if passkey_count == 0 {
-        return AuthorizationAction::NoCredentials;
-    }
-
     match (has_another_fido_dev, no_pass, passkey_count) {
+        // no other key and no credentials either,
+        // send the no cerds directly. the password
+        // does not matter here, there is nothing to
+        // unlock in the first place.
+        (false, _, 0) => AuthorizationAction::NoCredentials,
+
         // no other key, no password
         // and but one credential
         // skip ui, send the cerds directly
         (false, true, 1) => AuthorizationAction::UseOnlyPasskey,
 
-        // another key, no password,
-        // but single cerd
+        // another key, but either no or single cerd
         // the user intent is probably to use
         // either security key or use passkeyd
-        // so, presence to reduce ambiguity
+        // so, presence to reduce ambiguity.
+        // with no cerd of ours the password does not
+        // matter either, presence still lets the user
+        // reach for the external key.
+        (true, _, 0) => AuthorizationAction::Presence,
         (true, true, 1) => AuthorizationAction::Presence,
 
         // If no another key, no password, there are more than 1 cerds, selection is obviously needed.
@@ -221,6 +224,10 @@ fn authorize_selection(
     rp_entity: &PublicKeyCredentialRpEntity,
     passkeys: &[Passkey],
 ) -> anyhow::Result<usize> {
+    if passkeys.is_empty() {
+        anyhow::bail!(CtapStatus::NoCredentials);
+    }
+
     let ui_state = SelectUI {
         rp: rp_entity,
         other_uis: passkeys
@@ -656,11 +663,11 @@ mod tests {
         );
         assert_eq!(
             authorization_action(true, false, 0),
-            AuthorizationAction::NoCredentials
+            AuthorizationAction::Presence
         );
         assert_eq!(
             authorization_action(true, true, 0),
-            AuthorizationAction::NoCredentials
+            AuthorizationAction::Presence
         );
     }
 
