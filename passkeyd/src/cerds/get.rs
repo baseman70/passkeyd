@@ -123,6 +123,7 @@ fn load_passkeys(req: &Request) -> anyhow::Result<(PublicKeyCredentialRpEntity, 
     Ok((rp_entity, passkeys))
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum AuthorizationAction {
     NoCredentials,
     UseOnlyPasskey,
@@ -135,26 +136,27 @@ fn authorization_action(
     no_pass: bool,
     passkey_count: usize,
 ) -> AuthorizationAction {
-    match (has_another_fido_dev, no_pass, passkey_count) {
-        // no other key, no password
-        // and no credentials either
-        // send the no cerds directly
-        (false, true, 0) => AuthorizationAction::NoCredentials,
+    // If there are no credentials stored for this RP, always report NoCredentials
+    // so caBLE hybrid transport or another authenticator can handle the request.
+    if passkey_count == 0 {
+        return AuthorizationAction::NoCredentials;
+    }
 
+    match (has_another_fido_dev, no_pass, passkey_count) {
         // no other key, no password
         // and but one credential
         // skip ui, send the cerds directly
         (false, true, 1) => AuthorizationAction::UseOnlyPasskey,
 
         // another key, no password,
-        // but either no or single cerd
+        // but single cerd
         // the user intent is probably to use
         // either security key or use passkeyd
         // so, presence to reduce ambiguity
-        (true, true, 0..=1) => AuthorizationAction::Presence,
+        (true, true, 1) => AuthorizationAction::Presence,
 
         // If no another key, no password, there are more than 1 cerds, selection is obviously needed.
-        // If another key, has password, aribitray cerds, selection will handle it.
+        // If another key, has password, arbitrary cerds, selection will handle it.
         _ => AuthorizationAction::Selection,
     }
 }
@@ -245,8 +247,12 @@ fn authenticate_handler(
     ui_state: SelectUI,
 ) -> anyhow::Result<usize> {
     let mut child = spawn_ui(config, UI::KeySelect, ui_state);
-    let mut stdin = child.inner.stdin.take().unwrap();
-    let mut stdout = child.inner.stdout.take().unwrap();
+    let mut stdin = child.inner.stdin.take();
+    let mut stdout = child
+        .inner
+        .stdout
+        .take()
+        .context("failed to get UI stdout")?;
     let mut event_buf = Vec::new();
 
     loop {
@@ -255,12 +261,13 @@ fn authenticate_handler(
             match event {
                 UIMessage::SelectionDoneMaybeStartAuth(i) => {
                     if !config.no_pass {
+                        let stdin = stdin.as_mut().context("child stdin unavailable")?;
                         authorization(
                             hid,
                             channel,
                             config,
                             &mut child,
-                            &mut stdin,
+                            stdin,
                             &mut stdout,
                             &mut event_buf,
                         )?;
@@ -630,3 +637,75 @@ fn get_username_from_uid(uid: libc::uid_t) -> Option<String> {
     let cstr = unsafe { std::ffi::CStr::from_ptr(passwd.pw_name) };
     cstr.to_str().ok().map(|username| username.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_authorization_action_zero_credentials() {
+        // When there are no credentials stored, it should always return NoCredentials,
+        // allowing caBLE hybrid transport or another authenticator to handle the request.
+        assert_eq!(
+            authorization_action(false, false, 0),
+            AuthorizationAction::NoCredentials
+        );
+        assert_eq!(
+            authorization_action(false, true, 0),
+            AuthorizationAction::NoCredentials
+        );
+        assert_eq!(
+            authorization_action(true, false, 0),
+            AuthorizationAction::NoCredentials
+        );
+        assert_eq!(
+            authorization_action(true, true, 0),
+            AuthorizationAction::NoCredentials
+        );
+    }
+
+    #[test]
+    fn test_authorization_action_single_credential() {
+        // No other key, password disabled: skip UI directly
+        assert_eq!(
+            authorization_action(false, true, 1),
+            AuthorizationAction::UseOnlyPasskey
+        );
+        // Another key present, password disabled: user presence check
+        assert_eq!(
+            authorization_action(true, true, 1),
+            AuthorizationAction::Presence
+        );
+        // Password enabled: selection & authentication required
+        assert_eq!(
+            authorization_action(false, false, 1),
+            AuthorizationAction::Selection
+        );
+        assert_eq!(
+            authorization_action(true, false, 1),
+            AuthorizationAction::Selection
+        );
+    }
+
+    #[test]
+    fn test_authorization_action_multiple_credentials() {
+        // Multiple credentials always require selection
+        assert_eq!(
+            authorization_action(false, false, 2),
+            AuthorizationAction::Selection
+        );
+        assert_eq!(
+            authorization_action(false, true, 2),
+            AuthorizationAction::Selection
+        );
+        assert_eq!(
+            authorization_action(true, false, 2),
+            AuthorizationAction::Selection
+        );
+        assert_eq!(
+            authorization_action(true, true, 2),
+            AuthorizationAction::Selection
+        );
+    }
+}
+
