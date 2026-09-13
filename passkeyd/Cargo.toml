@@ -28,6 +28,8 @@ passkeyd-abi = { path = "../passkeyd-abi" }
 passkeyd-locale = { path = "../passkeyd-locale" }
 rsa = { version = "0.9.10", features = ["serde"] }
 zbus = { version = "5.19.0", features = ["blocking"] }
+passkeyd-cable = { path = "../passkeyd-cable" }
+
 
 [build-dependencies]
 cc = "1.4.4"

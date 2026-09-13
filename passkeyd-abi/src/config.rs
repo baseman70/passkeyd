@@ -33,7 +33,8 @@ const PASSKEY_CONFIG_PATH: &str = "/etc/passkeyd.conf";
 
 impl Config {
     pub fn initialize() -> anyhow::Result<Config> {
-        let content = fs::read_to_string(PASSKEY_CONFIG_PATH)?;
+        let content = fs::read_to_string(PASSKEY_CONFIG_PATH)
+            .or_else(|_| fs::read_to_string("passkeyd.conf"))?;
         let config = content
             .lines()
             .filter(|line| !line.trim_start().is_empty() || !line.trim_start().starts_with("#"))

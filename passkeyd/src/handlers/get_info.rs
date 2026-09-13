@@ -6,7 +6,7 @@ use crate::ctaphid::ctaphid::Ctaphid;
 
 pub fn handle(hid: &mut Ctaphid, _config: &Config, channel: Channel) -> anyhow::Result<()> {
     let mut response = get_info::ResponseBuilder {
-        versions: ctap_types::Vec::from_iter([get_info::Version::Fido2_0]),
+        versions: ctap_types::Vec::from_iter([get_info::Version::Fido2_0, get_info::Version::Fido2_1]),
         aaguid: ctap_types::Bytes::from_slice(&[0u8; 16]).unwrap(),
     }
     .build();
@@ -28,6 +28,6 @@ pub fn handle(hid: &mut Ctaphid, _config: &Config, channel: Channel) -> anyhow::
     let serialized_cbor = cbor_serialize(&response, &mut serialized_data[1..])?;
     let length = serialized_cbor.len();
     let final_cbor = &mut serialized_data[..length + 1];
-    hid.send_64response(channel, Command::Cbor, final_cbor)?;
+    hid.send_response(channel, Command::Cbor, final_cbor)?;
     Ok(())
 }

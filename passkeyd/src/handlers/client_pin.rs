@@ -51,7 +51,9 @@ pub fn handle(
         }
         PinV1Subcommand::GetPinUvAuthTokenUsingPinWithPermissions => todo!(),
         PinV1Subcommand::GetPinUvAuthTokenUsingUvWithPermissions => todo!(),
-        _ => todo!(),
+        _ => {
+            hid.send_cbor_status(channel, CtapStatus::UnsupportedOption)?;
+        }
     }
-    todo!()
+    Ok(())
 }
