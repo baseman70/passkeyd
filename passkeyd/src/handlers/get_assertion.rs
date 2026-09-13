@@ -30,9 +30,7 @@ pub fn handle(
                     log::info!("No local credentials found on token. Falling back to caBLE hybrid transport...");
                     match passkeyd_cable::perform_hybrid_assertion(raw_cbor) {
                         Ok(phone_cbor) => {
-                            let mut final_cbor = Vec::with_capacity(phone_cbor.len() + 1);
-                            final_cbor.push(0x00); // Prepend CTAP2_OK status byte
-                            final_cbor.extend_from_slice(&phone_cbor);
+                            let final_cbor = passkeyd_cable::format_ctap_cbor_response(&phone_cbor);
                             hid.send_response(channel, Command::Cbor, &final_cbor)?;
                             log::info!("Acknowledged CTAP instruction 'GetAssertion' via caBLE hybrid transport");
                             return Ok(());
