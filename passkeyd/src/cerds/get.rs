@@ -605,16 +605,19 @@ fn perform_cable_assertion(
     raw_cbor: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
     let (tx, rx) = mpsc::channel();
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
     let raw_cbor_vec = raw_cbor.to_vec();
 
     let cable_thread = std::thread::spawn(move || {
-        let res = crate::cable::perform_hybrid_assertion(&raw_cbor_vec);
+        let res = crate::cable::perform_hybrid_assertion(&raw_cbor_vec, cancel_rx);
         let _ = tx.send(res);
     });
 
     loop {
         if let Some(()) = try_recv_cancel(hid, channel)? {
             info!("Cancellation received from host; terminating caBLE session");
+            let _ = cancel_tx.send(());
+            let _ = cable_thread.join();
             anyhow::bail!(CtapStatus::KeepaliveCancel);
         }
 
@@ -627,6 +630,7 @@ fn perform_cable_assertion(
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(TryRecvError::Disconnected) => {
+                let _ = cable_thread.join();
                 anyhow::bail!("caBLE assertion thread terminated unexpectedly");
             }
         }
