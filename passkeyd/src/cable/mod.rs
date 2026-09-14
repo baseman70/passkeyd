@@ -78,8 +78,6 @@ mod tests {
 
     #[test]
     fn test_scoped_tokio_runtime_lifecycle() {
-        // Verify that the scoped runtime pattern can be invoked repeatedly
-        // from a synchronous caller without thread leaks or panics.
         for i in 0..3 {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -96,5 +94,3 @@ mod tests {
         }
     }
 }
-
-

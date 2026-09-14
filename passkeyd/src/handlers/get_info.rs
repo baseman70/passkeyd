@@ -6,7 +6,7 @@ use crate::ctaphid::ctaphid::Ctaphid;
 
 pub fn build_get_info_response() -> get_info::Response {
     let mut response = get_info::ResponseBuilder {
-        versions: ctap_types::Vec::from_iter([get_info::Version::Fido2_0, get_info::Version::Fido2_1]),
+        versions: ctap_types::Vec::from_iter([get_info::Version::Fido2_0]),
         aaguid: ctap_types::Bytes::from_slice(&[0u8; 16]).unwrap(),
     }
     .build();
@@ -43,10 +43,9 @@ mod tests {
     use ctaphid_types::Message;
 
     #[test]
-    fn test_get_info_manifest_contains_fido2_1() {
+    fn test_get_info_manifest_contains_fido2_0() {
         let resp = build_get_info_response();
         assert!(resp.versions.contains(&get_info::Version::Fido2_0));
-        assert!(resp.versions.contains(&get_info::Version::Fido2_1));
         assert_eq!(resp.options.as_ref().unwrap().rk, true);
         assert_eq!(resp.options.as_ref().unwrap().uv, Some(true));
     }

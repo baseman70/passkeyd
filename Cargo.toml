@@ -8,7 +8,6 @@ members = [
     "passkeyd-ui/passkeyd-ice/*",
     "passkeyd-ui/passkeyd-kde/*",
     "passkeyd-ui/passkeyd-gtk/*",
-    "passkeyd-cable",
 ]
 resolver = "3"
 

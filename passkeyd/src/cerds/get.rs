@@ -29,15 +29,33 @@ use crate::ctaphid::ctaphid::Ctaphid;
 use crate::ctaphid::{CtapStatus, TransportError};
 use crate::utils::{Readiness, cancellable_ui, has_another_fido_device};
 
+pub enum GetOutcome {
+    Local(Response),
+    External(Vec<u8>),
+}
+
 pub fn get(
     hid: &mut Ctaphid,
     channel: Channel,
     config: &Config,
     req: Request,
-) -> anyhow::Result<Response> {
+    raw_cbor: &[u8],
+) -> anyhow::Result<GetOutcome> {
     let (rp_entity, mut passkeys) = load_passkeys(&req)?;
     let action = authorization_action(has_another_fido_device(), config.no_pass, passkeys.len());
-    let authorized_index = authorize(hid, channel, config, &rp_entity, &passkeys, action)?;
+    let authorized_index = match authorize(hid, channel, config, &rp_entity, &passkeys, action) {
+        Ok(idx) => idx,
+        Err(e) => {
+            if let Some(ctap_err) = e.downcast_ref::<CtapStatus>() {
+                if *ctap_err == CtapStatus::NoCredentials && config.allow_external_keys {
+                    info!("No local credentials found; ALLOW_EXTERNAL_KEYS enabled, starting caBLE hybrid transport...");
+                    let cable_res = perform_cable_assertion(hid, channel, raw_cbor)?;
+                    return Ok(GetOutcome::External(cable_res));
+                }
+            }
+            return Err(e);
+        }
+    };
     let authorized_passkey = passkeys.swap_remove(authorized_index);
 
     let rp_id_hash = sha2::Sha256::digest(req.rp_id.as_bytes()).into();
@@ -88,7 +106,7 @@ pub fn get(
 
     authorized_passkey.sign_increment(rp_entity);
 
-    Ok(response)
+    Ok(GetOutcome::Local(response))
 }
 
 fn load_passkeys(req: &Request) -> anyhow::Result<(PublicKeyCredentialRpEntity, Vec<Passkey>)> {
@@ -578,6 +596,40 @@ fn try_recv_cancel(hid: &mut Ctaphid, channel: Channel) -> anyhow::Result<Option
         }
         None if hid.is_cancelled(channel) => Ok(Some(())),
         _ => Ok(None),
+    }
+}
+
+fn perform_cable_assertion(
+    hid: &mut Ctaphid,
+    channel: Channel,
+    raw_cbor: &[u8],
+) -> anyhow::Result<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    let raw_cbor_vec = raw_cbor.to_vec();
+
+    let cable_thread = std::thread::spawn(move || {
+        let res = crate::cable::perform_hybrid_assertion(&raw_cbor_vec);
+        let _ = tx.send(res);
+    });
+
+    loop {
+        if let Some(()) = try_recv_cancel(hid, channel)? {
+            info!("Cancellation received from host; terminating caBLE session");
+            anyhow::bail!(CtapStatus::KeepaliveCancel);
+        }
+
+        match rx.try_recv() {
+            Ok(res) => {
+                let _ = cable_thread.join();
+                return res;
+            }
+            Err(TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(TryRecvError::Disconnected) => {
+                anyhow::bail!("caBLE assertion thread terminated unexpectedly");
+            }
+        }
     }
 }
 
