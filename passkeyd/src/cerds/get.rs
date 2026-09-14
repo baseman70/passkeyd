@@ -766,5 +766,14 @@ mod tests {
             AuthorizationAction::Selection
         );
     }
+
+    #[test]
+    fn test_get_outcome_variants() {
+        let external = GetOutcome::External(vec![0x01, 0x02]);
+        match external {
+            GetOutcome::External(bytes) => assert_eq!(bytes, vec![0x01, 0x02]),
+            _ => panic!("Expected GetOutcome::External"),
+        }
+    }
 }
 

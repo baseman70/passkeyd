@@ -77,6 +77,14 @@ mod tests {
     }
 
     #[test]
+    fn test_format_ctap_cbor_response_empty_payload() {
+        let empty: [u8; 0] = [];
+        let framed = format_ctap_cbor_response(&empty);
+        assert_eq!(framed.len(), 1);
+        assert_eq!(framed[0], 0x00);
+    }
+
+    #[test]
     fn test_scoped_tokio_runtime_lifecycle() {
         for i in 0..3 {
             let rt = tokio::runtime::Builder::new_multi_thread()
