@@ -94,13 +94,20 @@ pub fn perform_hybrid_assertion(
                     .map_err(|e| match e {
                         WebauthnCError::Cancelled | WebauthnCError::Closed => {
                             info!("caBLE session cancelled or closed before tunnel establishment");
-                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                            anyhow::anyhow!(CtapStatus::KeepaliveCancel)
                         }
                         WebauthnCError::WebsocketError(msg) => {
                             info!("caBLE tunnel closed/error before establishment: {msg}");
-                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                            anyhow::anyhow!(CtapStatus::KeepaliveCancel)
                         }
-                        WebauthnCError::Ctap(ctap_err) => anyhow::anyhow!(CtapStatus::from(u8::from(ctap_err))),
+                        WebauthnCError::Ctap(ctap_err) => {
+                            let status = CtapStatus::from(u8::from(ctap_err));
+                            if status == CtapStatus::OperationDenied {
+                                anyhow::anyhow!(CtapStatus::KeepaliveCancel)
+                            } else {
+                                anyhow::anyhow!(status)
+                            }
+                        }
                         other => anyhow::anyhow!("caBLE tunnel connection failed: {:?}", other),
                     })?;
 
@@ -109,13 +116,21 @@ pub fn perform_hybrid_assertion(
                     .map_err(|e| match e {
                         WebauthnCError::Cancelled | WebauthnCError::Closed => {
                             info!("caBLE assertion cancelled by user on mobile device");
-                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                            anyhow::anyhow!(CtapStatus::KeepaliveCancel)
                         }
                         WebauthnCError::WebsocketError(msg) => {
                             info!("caBLE tunnel closed/error during assertion: {msg}");
-                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                            anyhow::anyhow!(CtapStatus::KeepaliveCancel)
                         }
-                        WebauthnCError::Ctap(ctap_err) => anyhow::anyhow!(CtapStatus::from(u8::from(ctap_err))),
+                        WebauthnCError::Ctap(ctap_err) => {
+                            let status = CtapStatus::from(u8::from(ctap_err));
+                            if status == CtapStatus::OperationDenied {
+                                info!("caBLE mobile authenticator user consent denied");
+                                anyhow::anyhow!(CtapStatus::KeepaliveCancel)
+                            } else {
+                                anyhow::anyhow!(status)
+                            }
+                        }
                         other => anyhow::anyhow!("caBLE CTAP assertion transmission failed: {:?}", other),
                     })?;
 
@@ -151,13 +166,20 @@ pub fn perform_hybrid_make_credential(
                     .map_err(|e| match e {
                         WebauthnCError::Cancelled | WebauthnCError::Closed => {
                             info!("caBLE session cancelled or closed before tunnel establishment");
-                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                            anyhow::anyhow!(CtapStatus::KeepaliveCancel)
                         }
                         WebauthnCError::WebsocketError(msg) => {
                             info!("caBLE tunnel closed/error before establishment: {msg}");
-                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                            anyhow::anyhow!(CtapStatus::KeepaliveCancel)
                         }
-                        WebauthnCError::Ctap(ctap_err) => anyhow::anyhow!(CtapStatus::from(u8::from(ctap_err))),
+                        WebauthnCError::Ctap(ctap_err) => {
+                            let status = CtapStatus::from(u8::from(ctap_err));
+                            if status == CtapStatus::OperationDenied {
+                                anyhow::anyhow!(CtapStatus::KeepaliveCancel)
+                            } else {
+                                anyhow::anyhow!(status)
+                            }
+                        }
                         other => anyhow::anyhow!("caBLE tunnel connection failed: {:?}", other),
                     })?;
 
@@ -166,13 +188,21 @@ pub fn perform_hybrid_make_credential(
                     .map_err(|e| match e {
                         WebauthnCError::Cancelled | WebauthnCError::Closed => {
                             info!("caBLE make credential cancelled by user on mobile device");
-                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                            anyhow::anyhow!(CtapStatus::KeepaliveCancel)
                         }
                         WebauthnCError::WebsocketError(msg) => {
                             info!("caBLE tunnel closed/error during make_credential: {msg}");
-                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                            anyhow::anyhow!(CtapStatus::KeepaliveCancel)
                         }
-                        WebauthnCError::Ctap(ctap_err) => anyhow::anyhow!(CtapStatus::from(u8::from(ctap_err))),
+                        WebauthnCError::Ctap(ctap_err) => {
+                            let status = CtapStatus::from(u8::from(ctap_err));
+                            if status == CtapStatus::OperationDenied {
+                                info!("caBLE mobile authenticator user consent denied");
+                                anyhow::anyhow!(CtapStatus::KeepaliveCancel)
+                            } else {
+                                anyhow::anyhow!(status)
+                            }
+                        }
                         other => anyhow::anyhow!("caBLE CTAP make_credential transmission failed: {:?}", other),
                     })?;
 
