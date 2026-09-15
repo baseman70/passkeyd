@@ -573,29 +573,23 @@ fn authorization_pass(
 /// If `Some(())` is retuned, cancel request is received
 /// None is returned, no cancel request
 fn try_recv_cancel(hid: &mut Ctaphid, channel: Channel) -> anyhow::Result<Option<()>> {
-    if !hid.hid.is_readable() {
-        return Ok(None);
-    }
-    // get_webauthn is responsible for readable states
-    // is_readble just read the status provided by get_webauthn
-    // so, get_webauth must be called
-    match hid.get_webauthn()? {
-        Some((incoming_channel, _)) => {
-            // Well, could handle this too by passing it to the dispatcher.
-            // But I don't think it would be that useful. I mean, why the hell are you even invoking
-            // auth twice(you need to invoke in one tab and then switch to another tab to invoke another)?
-            // If you're exercising free will, that's a different case.
-            // otherwise, GET YOUR SELF A BRAIN CHECK
-
-            error!("sent busy to channel {incoming_channel:?} caz currently processing {channel}");
-
-            anyhow::bail!(TransportError {
-                channel: incoming_channel,
-                err: DeviceError::ChannelBusy
-            });
+    while hid.hid.is_readable() {
+        match hid.get_webauthn()? {
+            Some((incoming_channel, _)) => {
+                error!("sent busy to channel {incoming_channel:?} caz currently processing {channel}");
+                anyhow::bail!(TransportError {
+                    channel: incoming_channel,
+                    err: DeviceError::ChannelBusy
+                });
+            }
+            None if hid.is_cancelled(channel) => return Ok(Some(())),
+            _ => (),
         }
-        None if hid.is_cancelled(channel) => Ok(Some(())),
-        _ => Ok(None),
+    }
+    if hid.is_cancelled(channel) {
+        Ok(Some(()))
+    } else {
+        Ok(None)
     }
 }
 
