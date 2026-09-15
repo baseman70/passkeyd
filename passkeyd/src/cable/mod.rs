@@ -125,7 +125,7 @@ pub fn perform_hybrid_assertion(
         }
     });
 
-    rt.shutdown_timeout(std::time::Duration::from_millis(500));
+    rt.shutdown_background();
     res
 }
 
@@ -182,7 +182,7 @@ pub fn perform_hybrid_make_credential(
         }
     });
 
-    rt.shutdown_timeout(std::time::Duration::from_millis(500));
+    rt.shutdown_background();
     res
 }
 

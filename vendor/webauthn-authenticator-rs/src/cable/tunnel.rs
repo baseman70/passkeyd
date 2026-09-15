@@ -463,7 +463,6 @@ impl Token for Tunnel {
                 Some(r) => r,
                 None => {
                     // end of stream
-                    self.close().await?;
                     return Err(WebauthnCError::Closed);
                 }
             };
@@ -472,14 +471,12 @@ impl Token for Tunnel {
                 break resp.data;
             } else if resp.message_type == CableFrameType::Shutdown {
                 info!("caBLE peer sent shutdown frame (cancelled on mobile device)");
-                self.close().await?;
                 return Err(WebauthnCError::Closed);
             } else {
                 // TODO: handle these.
                 warn!("unhandled message type: {:?}", resp);
             }
         };
-        self.close().await?;
         ui.cable_status_update(CableState::Processing);
 
         if data.is_empty() {
