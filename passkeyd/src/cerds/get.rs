@@ -614,6 +614,7 @@ fn perform_cable_assertion(
             info!("Cancellation received from host; terminating caBLE session");
             let _ = cancel_tx.send(());
             let _ = cable_thread.join();
+            hid.clear_cancelled(channel);
             anyhow::bail!(CtapStatus::KeepaliveCancel);
         }
 

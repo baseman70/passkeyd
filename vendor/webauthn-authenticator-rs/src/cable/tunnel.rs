@@ -189,31 +189,57 @@ impl Tunnel {
         // Handshake sent, get response
         ui.cable_status_update(CableState::WaitingForAuthenticatorResponse);
         trace!("Waiting for handshake response...");
-        let resp = stream.next().await.ok_or(WebauthnCError::Closed)??;
+        let resp = loop {
+            match stream.next().await {
+                None => return Err(WebauthnCError::Closed),
+                Some(Ok(Message::Binary(v))) => break v,
+                Some(Ok(Message::Ping(p))) => {
+                    let _ = stream.send(Message::Pong(p)).await;
+                }
+                Some(Ok(Message::Pong(_))) => continue,
+                Some(Ok(Message::Close(_))) => return Err(WebauthnCError::Closed),
+                Some(Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed))
+                | Some(Err(tokio_tungstenite::tungstenite::Error::AlreadyClosed)) => {
+                    return Err(WebauthnCError::Closed);
+                }
+                Some(Err(e)) => return Err(e.into()),
+                Some(Ok(other)) => {
+                    error!("Unexpected websocket response type: {:?}", other);
+                    return Err(WebauthnCError::Unknown);
+                }
+            }
+        };
 
         ui.cable_status_update(CableState::Handshaking);
-        let mut crypter = if let Message::Binary(v) = resp {
-            trace!("<!< {}", hex::encode(&v));
-            noise.process_response(&v)?
-        } else {
-            error!("Unexpected websocket response type");
-            return Err(WebauthnCError::Unknown);
-        };
+        trace!("<!< {}", hex::encode(&resp));
+        let mut crypter = noise.process_response(&resp)?;
 
         // Waiting for post-handshake message
         ui.cable_status_update(CableState::WaitingForAuthenticatorResponse);
         trace!("Waiting for post-handshake message...");
-        let resp = stream.next().await.ok_or(WebauthnCError::Closed)??;
+        let resp = loop {
+            match stream.next().await {
+                None => return Err(WebauthnCError::Closed),
+                Some(Ok(Message::Binary(v))) => break v,
+                Some(Ok(Message::Ping(p))) => {
+                    let _ = stream.send(Message::Pong(p)).await;
+                }
+                Some(Ok(Message::Pong(_))) => continue,
+                Some(Ok(Message::Close(_))) => return Err(WebauthnCError::Closed),
+                Some(Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed))
+                | Some(Err(tokio_tungstenite::tungstenite::Error::AlreadyClosed)) => {
+                    return Err(WebauthnCError::Closed);
+                }
+                Some(Err(e)) => return Err(e.into()),
+                Some(Ok(other)) => {
+                    error!("Unexpected websocket response type: {:?}", other);
+                    return Err(WebauthnCError::Unknown);
+                }
+            }
+        };
         ui.cable_status_update(CableState::Handshaking);
 
-        let mut v = if let Message::Binary(v) = resp {
-            trace!("<!< {}", hex::encode(&v));
-            Zeroizing::new(v.to_vec())
-        } else {
-            error!("Unexpected websocket response type");
-            return Err(WebauthnCError::Unknown);
-        };
-
+        let mut v = Zeroizing::new(resp.to_vec());
         let len = crypter.decrypt(&mut v)?;
         trace!("<<< {}", hex::encode(&v[..len]));
 
@@ -347,8 +373,20 @@ impl Tunnel {
     pub(super) async fn recv(&mut self) -> Result<Option<CableFrame>, WebauthnCError> {
         loop {
             let resp = match self.stream.next().await {
-                None => return Ok(None),
-                Some(r) => r?,
+                None => {
+                    info!("caBLE tunnel WebSocket stream ended (None)");
+                    return Ok(None);
+                }
+                Some(Ok(msg)) => msg,
+                Some(Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed))
+                | Some(Err(tokio_tungstenite::tungstenite::Error::AlreadyClosed)) => {
+                    info!("caBLE tunnel WebSocket connection closed by remote peer");
+                    return Ok(None);
+                }
+                Some(Err(e)) => {
+                    info!("caBLE tunnel WebSocket error: {:?}", e);
+                    return Err(e.into());
+                }
             };
 
             match resp {
@@ -356,11 +394,20 @@ impl Tunnel {
                     let mut resp = Zeroizing::new(v.to_vec());
                     trace!("<!< {}", hex::encode(&resp));
                     let len = self.crypter.decrypt(&mut resp)?;
-                    // TODO: protocol version
-                    return Ok(Some(CableFrame::from_bytes(1, &resp[..len])));
+                    if len == 0 {
+                        info!("Empty caBLE message received from peer (Shutdown)");
+                        return Ok(Some(CableFrame {
+                            protocol_version: 1,
+                            message_type: CableFrameType::Shutdown,
+                            data: vec![],
+                        }));
+                    }
+                    let frame = CableFrame::from_bytes(1, &resp[..len]);
+                    debug!("caBLE received frame: {:?}", frame.message_type);
+                    return Ok(Some(frame));
                 }
-                Message::Close(_) => {
-                    debug!("caBLE tunnel closed by remote peer");
+                Message::Close(reason) => {
+                    info!("caBLE tunnel closed by remote peer: {:?}", reason);
                     return Ok(None);
                 }
                 Message::Ping(p) => {
@@ -423,6 +470,10 @@ impl Token for Tunnel {
 
             if resp.message_type == CableFrameType::Ctap {
                 break resp.data;
+            } else if resp.message_type == CableFrameType::Shutdown {
+                info!("caBLE peer sent shutdown frame (cancelled on mobile device)");
+                self.close().await?;
+                return Err(WebauthnCError::Closed);
             } else {
                 // TODO: handle these.
                 warn!("unhandled message type: {:?}", resp);
@@ -431,6 +482,9 @@ impl Token for Tunnel {
         self.close().await?;
         ui.cable_status_update(CableState::Processing);
 
+        if data.is_empty() {
+            return Err(WebauthnCError::Closed);
+        }
         let err = CtapError::from(data.remove(0));
         if !err.is_ok() {
             return Err(err.into());
