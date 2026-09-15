@@ -613,12 +613,22 @@ fn perform_cable_assertion(
         let _ = tx.send(res);
     });
 
+    let mut last_keepalive = std::time::Instant::now();
+
     loop {
         if let Some(()) = try_recv_cancel(hid, channel)? {
             info!("Cancellation received from host; terminating caBLE session");
             let _ = cancel_tx.send(());
             let _ = cable_thread.join();
             anyhow::bail!(CtapStatus::KeepaliveCancel);
+        }
+
+        // FIDO CTAPHID spec: Send periodic keepalive (0x02 = STATUS_UPNEEDED) every 100ms
+        // so the host/browser knows the authenticator is waiting for user presence and keeps
+        // its HID read loop responsive to cancellation events.
+        if last_keepalive.elapsed() >= Duration::from_millis(100) {
+            let _ = hid.send_64response(channel, ctaphid_types::Command::KeepAlive, [0x02]);
+            last_keepalive = std::time::Instant::now();
         }
 
         match rx.try_recv() {
