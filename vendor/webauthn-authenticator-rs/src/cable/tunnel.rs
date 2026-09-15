@@ -345,22 +345,37 @@ impl Tunnel {
     }
 
     pub(super) async fn recv(&mut self) -> Result<Option<CableFrame>, WebauthnCError> {
-        let resp = match self.stream.next().await {
-            None => return Ok(None),
-            Some(r) => r?,
-        };
+        loop {
+            let resp = match self.stream.next().await {
+                None => return Ok(None),
+                Some(r) => r?,
+            };
 
-        let mut resp = if let Message::Binary(v) = resp {
-            Zeroizing::new(v.to_vec())
-        } else {
-            error!("Incorrect message type");
-            return Err(WebauthnCError::Unknown);
-        };
-
-        trace!("<!< {}", hex::encode(&resp));
-        let len = self.crypter.decrypt(&mut resp)?;
-        // TODO: protocol version
-        Ok(Some(CableFrame::from_bytes(1, &resp[..len])))
+            match resp {
+                Message::Binary(v) => {
+                    let mut resp = Zeroizing::new(v.to_vec());
+                    trace!("<!< {}", hex::encode(&resp));
+                    let len = self.crypter.decrypt(&mut resp)?;
+                    // TODO: protocol version
+                    return Ok(Some(CableFrame::from_bytes(1, &resp[..len])));
+                }
+                Message::Close(_) => {
+                    debug!("caBLE tunnel closed by remote peer");
+                    return Ok(None);
+                }
+                Message::Ping(p) => {
+                    let _ = self.stream.send(Message::Pong(p)).await;
+                    continue;
+                }
+                Message::Pong(_) => {
+                    continue;
+                }
+                _ => {
+                    error!("Incorrect message type: {:?}", resp);
+                    return Err(WebauthnCError::Unknown);
+                }
+            }
+        }
     }
 
     pub async fn transmit_cbor<U: UiCallback>(&mut self, cbor: &[u8], ui: &U) -> Result<Vec<u8>, WebauthnCError> {

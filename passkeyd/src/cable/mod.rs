@@ -100,7 +100,10 @@ pub fn perform_hybrid_assertion(
                 info!("caBLE tunnel connected! Transmitting CTAP assertion request ({} bytes)...", raw_ctap_request.len());
                 let response = tunnel.transmit_cbor(raw_ctap_request, &ui).await
                     .map_err(|e| match e {
-                        WebauthnCError::Cancelled => anyhow::anyhow!(CtapStatus::KeepaliveCancel),
+                        WebauthnCError::Cancelled | WebauthnCError::Closed => {
+                            info!("caBLE assertion cancelled by user on mobile device");
+                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                        }
                         WebauthnCError::Ctap(ctap_err) => anyhow::anyhow!(CtapStatus::from(u8::from(ctap_err))),
                         other => anyhow::anyhow!("caBLE CTAP assertion transmission failed: {:?}", other),
                     })?;
@@ -135,7 +138,7 @@ pub fn perform_hybrid_make_credential(
                 let ui = PasskeydCableUi;
                 let mut tunnel = connect_cable_tunnel(CableRequestType::MakeCredential, &ui).await
                     .map_err(|e| match e {
-                        WebauthnCError::Cancelled => anyhow::anyhow!(CtapStatus::KeepaliveCancel),
+                        WebauthnCError::Cancelled | WebauthnCError::Closed => anyhow::anyhow!(CtapStatus::KeepaliveCancel),
                         WebauthnCError::Ctap(ctap_err) => anyhow::anyhow!(CtapStatus::from(u8::from(ctap_err))),
                         other => anyhow::anyhow!("caBLE tunnel connection failed: {:?}", other),
                     })?;
@@ -143,7 +146,10 @@ pub fn perform_hybrid_make_credential(
                 info!("caBLE tunnel connected! Transmitting CTAP make_credential request ({} bytes)...", raw_ctap_request.len());
                 let response = tunnel.transmit_cbor(raw_ctap_request, &ui).await
                     .map_err(|e| match e {
-                        WebauthnCError::Cancelled => anyhow::anyhow!(CtapStatus::KeepaliveCancel),
+                        WebauthnCError::Cancelled | WebauthnCError::Closed => {
+                            info!("caBLE make credential cancelled by user on mobile device");
+                            anyhow::anyhow!(CtapStatus::OperationDenied)
+                        }
                         WebauthnCError::Ctap(ctap_err) => anyhow::anyhow!(CtapStatus::from(u8::from(ctap_err))),
                         other => anyhow::anyhow!("caBLE CTAP make_credential transmission failed: {:?}", other),
                     })?;
