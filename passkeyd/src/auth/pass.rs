@@ -30,5 +30,5 @@ pub fn verify_password(username: &str, pass: &str) -> anyhow::Result<bool> {
 
     let result = unsafe { CStr::from_ptr(result) };
 
-    return Ok(result == hash);
+    Ok(result == hash)
 }

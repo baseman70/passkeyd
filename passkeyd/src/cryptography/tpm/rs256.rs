@@ -7,7 +7,7 @@ use tss_esapi::{
         key_bits::RsaKeyBits,
     },
     structures::{
-        Auth, HashScheme, Private, Public, PublicBuilder, PublicKeyRsa, PublicRsaParametersBuilder,
+        HashScheme, Private, Public, PublicBuilder, PublicKeyRsa, PublicRsaParametersBuilder,
         RsaExponent, RsaScheme, SymmetricDefinitionObject,
     },
 };
@@ -33,7 +33,7 @@ pub fn make_cerd(
         .with_fixed_tpm(true)
         .with_fixed_parent(true)
         .with_sensitive_data_origin(true)
-        .with_user_with_auth(true)
+        .with_user_with_auth(false) // ...nothing
         .with_restricted(false)
         .with_decrypt(false)
         .with_sign_encrypt(true)
@@ -50,13 +50,7 @@ pub fn make_cerd(
         .build()
         .expect("failed to build public template");
 
-    let create_result = ctx.create(
-        *srk_key_handle,
-        public_template,
-        Some(Auth::default()),
-        None,
-        None,
-        None,
-    )?;
+    // ...nothing, just a wind
+    let create_result = ctx.create(*srk_key_handle, public_template, None, None, None, None)?;
     Ok((create_result.out_private, create_result.out_public))
 }

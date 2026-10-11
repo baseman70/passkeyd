@@ -1,6 +1,8 @@
-use anyhow::Ok;
+use anyhow::Context as AnyhowContex;
 use log::debug;
-use sha2::Sha256;
+use log::info;
+use log::warn;
+use sha2::{Digest as SHA2Digest, Sha256};
 use std::str::FromStr;
 use tss_esapi::{
     Context, TctiNameConf,
@@ -18,13 +20,19 @@ use tss_esapi::{
         session_handles::AuthSession,
     },
     structures::{
-        self, Auth, Digest, EccPoint, EccScheme, HashcheckTicket, KeyDerivationFunctionScheme,
-        PcrSelectionList, PcrSelectionListBuilder, PcrSlot, Private, Public, PublicBuilder,
+        Auth, Digest, EccPoint, EccScheme, HashcheckTicket, KeyDerivationFunctionScheme,
+        PcrSelectionListBuilder, PcrSlot, Private, Public, PublicBuilder,
         PublicEccParametersBuilder, Signature, SignatureScheme, SymmetricDefinition,
         SymmetricDefinitionObject,
     },
     tss2_esys::TPMT_TK_HASHCHECK,
 };
+
+// Some older firmware only measures into the SHA-1 bank and leaves the SHA-256
+// bank allocated but at all zeros.The policy session itself always uses SHA-256 (authHash), and
+// signatures are SHA-256 as well; only the PCR differs.
+const PCR_BANK_PREFERENCE: [HashingAlgorithm; 2] =
+    [HashingAlgorithm::Sha256, HashingAlgorithm::Sha1];
 
 pub fn initialize_tpm_with_session() -> anyhow::Result<Context> {
     let mut ctx = initialize_tpm()?;
@@ -46,79 +54,116 @@ fn initialize_pass_session(ctx: &mut Context) {
 }
 
 // some duct tape function
-fn compute_explicit_pcr_digest(
+// has been promoted to
+// New duct tape function
+fn pcr7_session(
     ctx: &mut Context,
-    pcr_selection: PcrSelectionList,
-) -> anyhow::Result<Digest> {
-    let (_, _, pcr_data) = ctx.pcr_read(pcr_selection)?;
-    use sha2::Digest as ShaDigest;
-    let mut hasher = Sha256::new();
-    pcr_data
-        .value()
-        .iter()
-        .for_each(|pcr| hasher.update(pcr.value()));
-    Ok(Digest::try_from(hasher.finalize().as_slice())?)
+    session_type: SessionType,
+    expected_policy: Option<&Digest>,
+) -> anyhow::Result<(AuthSession, Digest)> {
+    for bank in PCR_BANK_PREFERENCE {
+        let selection = PcrSelectionListBuilder::new()
+            .with_selection(bank, &[PcrSlot::Slot7])
+            .build()
+            .context("failed building the PCR selection")?;
+
+        let values = match ctx.pcr_read(selection.clone()) {
+            Ok((_, _, values)) => values,
+            Err(e) if expected_policy.is_none() => {
+                anyhow::bail!(
+                    "Failed to read PCR 7 from the {bank:?} bank. Fallback is unavailable: {e}."
+                );
+            }
+            Err(e) => {
+                warn!("Failed to read PCR 7 from the {bank:?} bank, trying next bank: {e}");
+                continue;
+            }
+        };
+
+        let Some(pcr_value) = values
+            .value()
+            .first()
+            .filter(|value| !value.value().iter().all(|byte| *byte == 0))
+        else {
+            info!("PCR 7 is empty in the {bank:?} bank. Trying fallback.");
+            continue;
+        };
+
+        let pcr_digest = Digest::try_from(Sha256::digest(pcr_value.value()).as_slice())?;
+
+        let session = ctx
+            .start_auth_session(
+                None,
+                None,
+                None,
+                session_type,
+                SymmetricDefinition::Aes {
+                    key_bits: AesKeyBits::Aes128,
+                    mode: SymmetricMode::Cfb,
+                },
+                HashingAlgorithm::Sha256,
+            )
+            .context("out of session slots?")?
+            .context("the TPM returned no auth session")?;
+
+        if let Err(e) = ctx.policy_pcr(session.try_into()?, pcr_digest, selection) {
+            warn!("Applying PCR 7 policy for the {bank:?} bank failed: {e}");
+            let _ = ctx.flush_context(ObjectHandle::from(SessionHandle::from(session)));
+            continue;
+        }
+
+        let policy = match ctx.policy_get_digest(session.try_into()?) {
+            Ok(digest) => digest,
+            Err(e) => {
+                warn!("Reading PCR 7 policy digest for the {bank:?} bank failed: {e}");
+                let _ = ctx.flush_context(ObjectHandle::from(SessionHandle::from(session)));
+                continue;
+            }
+        };
+        if expected_policy.is_none_or(|expected| expected.value() == policy.value()) {
+            if expected_policy.is_none() && bank == HashingAlgorithm::Sha1 {
+                warn!(
+                    "PCR 7 is not filled in the SHA-256 bank, Binding the key to \
+                     the weaker SHA-1 bank as a fallback"
+                );
+            }
+            debug!("PCR 7 policy built from the {bank:?} bank");
+            return Ok((session, policy));
+        }
+        let _ = ctx.flush_context(ObjectHandle::from(SessionHandle::from(session)));
+        debug!(
+            "PCR 7 policy from the {bank:?} bank does not match the key's policy, trying next bank"
+        );
+    }
+
+    match expected_policy {
+        None => anyhow::bail!("PCR 7 is not extended in either the SHA-256 or SHA-1 bank."),
+        Some(_) => anyhow::bail!(
+            "PCR 7 policy mismatch, secure boot state or PCR bank allocation may have changed."
+        ),
+    }
 }
 
-fn initialize_policy_session(ctx: &mut Context) -> anyhow::Result<()> {
+fn initialize_policy_session(
+    ctx: &mut Context,
+    expected_policy: &Digest,
+) -> anyhow::Result<AuthSession> {
     ctx.set_sessions((None, None, None));
-    let session_handle = ctx
-        .start_auth_session(
-            None,
-            None,
-            None,
-            SessionType::Policy,
-            SymmetricDefinition::Aes {
-                key_bits: AesKeyBits::Aes128,
-                mode: SymmetricMode::Cfb,
-            },
-            HashingAlgorithm::Sha256,
-        )?
-        .unwrap(); //can fail in out of sessions case, which ofc is rare.
-
-    // binding to a secure boot
-    let pcr_selection = PcrSelectionListBuilder::new()
-        .with_selection(HashingAlgorithm::Sha256, &[PcrSlot::Slot7])
-        .build()?;
-
-    let pcr_digest = compute_explicit_pcr_digest(ctx, pcr_selection.clone())?;
-
-    ctx.policy_pcr(session_handle.try_into()?, pcr_digest, pcr_selection)?;
-    // ctx.policy_pcr(session_handle.try_into()?, Digest::default(), pcr_selection)?;
-    ctx.set_sessions((Some(session_handle), None, None));
+    let (session, _) = pcr7_session(ctx, SessionType::Policy, Some(expected_policy))?;
+    ctx.set_sessions((Some(session), None, None));
     debug!("TPM session set to PCR 7 policy.");
-    Ok(())
+    Ok(session)
 }
 
 pub fn get_pcr7_policy(ctx: &mut Context) -> anyhow::Result<Digest> {
-    let current_session = ctx.sessions();
+    let current_sessions = ctx.sessions();
     ctx.set_sessions((None, None, None));
-    let session_handle = ctx
-        .start_auth_session(
-            None,
-            None,
-            None,
-            SessionType::Trial,
-            SymmetricDefinition::Aes {
-                key_bits: AesKeyBits::Aes128,
-                mode: SymmetricMode::Cfb,
-            },
-            HashingAlgorithm::Sha256,
-        )?
-        .unwrap();
-
-    // binding to a secure boot
-    let pcr_selection = PcrSelectionListBuilder::new()
-        .with_selection(HashingAlgorithm::Sha256, &[PcrSlot::Slot7])
-        .build()?;
-
-    let pcr_digest = compute_explicit_pcr_digest(ctx, pcr_selection.clone())?;
-    ctx.policy_pcr(session_handle.try_into()?, pcr_digest, pcr_selection)?;
-    // ctx.policy_pcr(session_handle.try_into()?, Digest::default(), pcr_selection)?;
-    let p = ctx.policy_get_digest(session_handle.try_into()?)?;
-    ctx.flush_context(ObjectHandle::from(SessionHandle::from(session_handle)))?;
-    ctx.set_sessions(current_session);
-    Ok(p)
+    let result = pcr7_session(ctx, SessionType::Trial, None).map(|(session, digest)| {
+        let _ = ctx.flush_context(ObjectHandle::from(SessionHandle::from(session)));
+        digest
+    });
+    ctx.set_sessions(current_sessions);
+    result
 }
 
 pub fn create_primary_key_handle(ctx: &mut Context) -> anyhow::Result<KeyHandle> {
@@ -173,24 +218,32 @@ pub fn sign(
     srk_handle: &KeyHandle,
     private_key: Private,
     public_key: Public,
-    data_to_sing: &[u8],
+    data_to_sign: &[u8],
 ) -> anyhow::Result<Signature> {
-    use sha2::Digest;
-    let key_handle = ctx.load(*srk_handle, private_key, public_key)?;
-    initialize_policy_session(ctx)?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(data_to_sing);
-    let digest = structures::Digest::try_from(hasher.finalize().as_slice())?;
-
-    let ticket = TPMT_TK_HASHCHECK {
+    let expected_policy = public_key.auth_policy().clone();
+    let digest = Digest::try_from(Sha256::digest(data_to_sign).as_slice())?;
+    let validation = HashcheckTicket::try_from(TPMT_TK_HASHCHECK {
         hierarchy: TPM2_RH_NULL,
         tag: TPM2_ST_HASHCHECK,
         ..Default::default()
+    })?;
+    let key_handle = ctx.load(*srk_handle, private_key, public_key)?;
+
+    let session = match initialize_policy_session(ctx, &expected_policy) {
+        Ok(session) => session,
+        Err(e) => {
+            // Policy could not be satisfied: don't leave the key loaded.
+            let _ = ctx.flush_context(ObjectHandle::from(key_handle));
+            initialize_pass_session(ctx);
+            return Err(e);
+        }
     };
+    let signature = ctx.sign(key_handle, digest, SignatureScheme::Null, validation);
 
-    let validation = HashcheckTicket::try_from(ticket)?;
+    ctx.set_sessions((None, None, None));
+    let _ = ctx.flush_context(ObjectHandle::from(SessionHandle::from(session)));
+    let _ = ctx.flush_context(ObjectHandle::from(key_handle));
+    initialize_pass_session(ctx);
 
-    ctx.sign(key_handle, digest, SignatureScheme::Null, validation)
-        .map_err(|e| e.into())
+    signature.map_err(|e| e.into())
 }

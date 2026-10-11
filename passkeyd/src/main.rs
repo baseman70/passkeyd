@@ -12,7 +12,6 @@ fn main() -> anyhow::Result<()> {
     let config = config::Config::initialize()?;
     env_logger::init();
     passkeyd_locale::init_translations();
-
     let mut hid = ctaphid::ctaphid::Ctaphid::new();
     debug!("Passkeyd started. Waiting for HID packets...");
 

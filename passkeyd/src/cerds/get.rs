@@ -261,7 +261,7 @@ fn authorize_selection(
 
     let ui_state = SelectUI {
         rp: rp_entity.clone(),
-        other_uis: other_uis,
+        other_uis,
         no_pass: config.no_pass,
     };
 
@@ -413,15 +413,16 @@ fn authorization_fprint(
 
     fprint_device.verify_start("")?;
 
-    let mut status_stream = fprint_device.receive_verify_status()?;
+    let status_stream = fprint_device.receive_verify_status()?;
 
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        while let Some(signal) = status_stream.next() {
-            if let Ok(args) = signal.args() {
-                if tx.send(args.result).is_err() {
-                    break;
-                }
+        for signal in status_stream {
+            if signal
+                .args()
+                .is_ok_and(|args| tx.send(args.result).is_err())
+            {
+                break;
             }
         }
     });
@@ -439,7 +440,7 @@ fn authorization_fprint(
                     return Ok(AuthorizationOutcome::Authorized);
                 }
                 "verify-no-match" => {
-                    attempts = attempts + 1;
+                    attempts += 1;
 
                     if attempts >= MAX_ATTEMPTS {
                         let _ = fprint_device.verify_stop();
@@ -501,8 +502,8 @@ fn authorization_pam(
     let (pam_result_tx, pam_result_rx) = mpsc::channel();
 
     let conv = InteractiveConversation {
-        answer_rx: answer_rx,
-        question_tx: question_tx,
+        answer_rx,
+        question_tx,
     };
 
     let Ok(mut client) = pam::Client::with_conversation("passkeyd", conv) else {
@@ -616,10 +617,11 @@ fn try_ui_message(
         anyhow::bail!(CtapStatus::KeepaliveCancel);
     };
 
-    if let Some(_) = child
+    if child
         .inner
         .try_wait()
         .context("failed to poll UI process")?
+        .is_some()
     {
         anyhow::bail!(CtapStatus::OperationDenied);
     }
