@@ -79,9 +79,7 @@ pub fn make(
     )?;
 
     let mut res = ResponseBuilder {
-        auth_data: authenticator_data
-            .serialize()
-            .expect("failed to searialize"),
+        auth_data: auth_data_bytes,
         fmt: AttestationStatementFormat::Packed,
     }
     .build();
@@ -131,6 +129,7 @@ pub fn make(
                     rp: &req.rp,
                     other_ui: &passkey.credential_source.other_ui,
                 },
+                true,
             ),
         )?
         .exit_status
@@ -200,6 +199,7 @@ fn request_selection(
                 ),
                 button: &passkeyd_locale::translate!("passkeyd.cerds.make.presence_ui.button"),
             },
+            true,
         ),
     )?
     .exit_status)

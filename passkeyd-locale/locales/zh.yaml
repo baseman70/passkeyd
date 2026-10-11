@@ -28,6 +28,12 @@ ui:
       helper_text: "身份验证失败，请重试。"
       password: "输入你的口令"
       description: "输入你的口令以授权此通行密钥请求"
+      fingerprint_description: "轻触指纹传感器以进行身份验证"
+      fingerprint_retry: "指纹未识别，请重试"
+      fallback_fprint_device: "指纹设备不可用，回退到密码"
+      fallback_fprint_user: "此用户未配置指纹，回退到密码"
+      fallback_no_fprints: "未注册指纹，回退到密码"
+      fallback_pam: "PAM 认证不可用，回退到密码"
 
     select:
       title_bar: "选择通行密钥"

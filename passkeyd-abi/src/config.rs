@@ -9,7 +9,7 @@ use std::{collections::HashMap, fs};
 // Assuming the malware is also underprivileged, if it has higher privileges, well, well.
 // If someone is dumb enough to run random stuff with privileges, they should just to Windows with windows defender turned on.
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Auth {
     FPRINT,
     PASS,
@@ -81,6 +81,16 @@ impl Config {
 
         let no_pass = config.get("NO_PASS").map(|x| x == "yes").unwrap_or(false);
 
+        let auth = config
+            .get("AUTH_TYPE")
+            .and_then(|s| match s.to_lowercase().as_str() {
+                "fprint" | "fingerprint" => Some(Auth::FPRINT),
+                "pass" | "password" => Some(Auth::PASS),
+                "pam" => Some(Auth::PAM),
+                _ => None,
+            })
+            .unwrap_or(Auth::PASS);
+
         unsafe {
             std::env::set_var("RUST_LOG", &rust_log);
         }
@@ -94,7 +104,7 @@ impl Config {
             front_select,
             front_selection,
             use_tpm_cryptography,
-            auth: Auth::PASS,
+            auth,
         })
     }
 }

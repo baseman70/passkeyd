@@ -1,11 +1,14 @@
 // use std::ops::{Deref, DerefMut};
-use crate::{config::Config, database::layout::OtherUI};
+use crate::{
+    config::{Auth, Config},
+    database::layout::OtherUI,
+};
 use ctap_types::{
     serde::{cbor_serialize_to, ser::Writer},
     webauthn::PublicKeyCredentialRpEntity,
 };
 use log::debug;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     io::Write,
     process::{Child, Command, Stdio},
@@ -144,7 +147,7 @@ impl UI {
                 .to_string();
             match self {
                 UI::KeyEnroll => format!("{target_dir}/{}", "passkeyd-ice-enroll"),
-                UI::KeySelect => format!("{target_dir}/{}", "passkeyd-ice-select"),
+                UI::KeySelect => format!("{target_dir}/{}", "passkeyd-kde-select"),
                 UI::KeySelection => format!("{target_dir}/{}", "passkeyd-ice-selection"),
             }
         }
@@ -184,7 +187,7 @@ impl SystemdChild {
 }
 
 // Util function
-pub fn spawn_ui<State>(config: &Config, ui: UI, state: State) -> SystemdChild
+pub fn spawn_ui<State>(config: &Config, ui: UI, state: State, drop_stdin: bool) -> SystemdChild
 where
     State: Serialize,
 {
@@ -206,11 +209,18 @@ where
         .stdout(Stdio::piped())
         .spawn()
         .expect("Failed to spawn UI, are you root?");
-    let mut stdin = child.stdin.take().expect("Failed to get stdin");
+
+    let stdin = if drop_stdin {
+        &mut child.stdin.take().expect("Failed to take stdin")
+    } else {
+        child.stdin.as_mut().expect("Failed to get stdin")
+    };
+
     stdin
         .write_all(&state_buffer.0[..cbor])
         .expect("Failed to write into pipe");
 
+    stdin.flush().expect("Failed to flush initial state");
     SystemdChild {
         inner: child,
         uid: config.gui_uid,
@@ -231,10 +241,17 @@ pub struct EnrollUI<'a> {
     pub other_ui: &'a OtherUI,
 }
 
-#[derive(Serialize)]
-pub struct SelectUI<'a> {
-    pub rp: &'a PublicKeyCredentialRpEntity,
-    pub other_uis: Vec<&'a OtherUI>,
+// #[derive(Serialize, Deserialize)]
+// pub struct SelectUI {
+//     pub rp: PublicKeyCredentialRpEntity,
+//     pub other_uis: Vec<OtherUI>,
+//     pub no_pass: bool,
+// }
+
+#[derive(Serialize, Deserialize)]
+pub struct SelectUI {
+    pub rp: PublicKeyCredentialRpEntity,
+    pub other_uis: Vec<OtherUI>,
     pub no_pass: bool,
 }
 
@@ -247,14 +264,15 @@ pub enum UIMessage {
     Password(String),
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub enum ServiceMessage {
-    FallbackToPassword(FallbackToPasswordReason),
+    AuthSelected(Auth),
     PAMQuestion(ConversationQuestion),
+    FallbackToPassword(FallbackToPasswordReason),
     Retry,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub enum ConversationQuestion {
     Info(String),
     SensitiveInput(String),

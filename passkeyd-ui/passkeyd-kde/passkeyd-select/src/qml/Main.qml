@@ -6,146 +6,82 @@ import org.kde.kirigami as Kirigami
 // qmllint disable import
 import passkeyd.ui.select
 
-Kirigami.ApplicationWindow {
+// A plain Plasma-style dialog: content on top, a separator and the buttons
+// below. What is shown, and every decision, comes from the Rust side through
+// `selectionState`; each screen is its own file in this folder.
+Controls.ApplicationWindow {
     id: root
-    visible: true
-    title: selectionState.skipSelection ? selectionState.authTitle : selectionState.selectTitle
 
-    width: 420
-    height: 230
-    minimumWidth: width
-    maximumWidth: width
-    minimumHeight: height
-    maximumHeight: height
+    readonly property int fixedWidth: Kirigami.Units.gridUnit * 22
+    readonly property int margin: Kirigami.Units.largeSpacing
+    // The window is as tall as its content needs and grows when the core adds
+    // a notice, so there is never empty space and never a squeezed field.
+    readonly property int fittedHeight: content.implicitHeight + margin * 2
+
+    // Same order as the children of the StackLayout below.
+    readonly property var pages: ["select", "waiting", "form", "fingerprint"]
+
+    visible: true
+    title: selectionState.title
+
+    width: fixedWidth
+    height: fittedHeight
+    minimumWidth: fixedWidth
+    maximumWidth: fixedWidth
+    minimumHeight: fittedHeight
+    maximumHeight: fittedHeight
 
     flags: Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.WindowCloseButtonHint
 
     onClosing: close => {
         close.accepted = false;
-        selectionState.deny();
+        selectionState.cancel();
+    }
+
+    Shortcut {
+        sequence: "Escape"
+        onActivated: selectionState.cancel()
     }
 
     SelectionState {
         id: selectionState
+        Component.onCompleted: start()
     }
 
-    pageStack.initialPage: selectionState.skipSelection ? authorizePage : selectPage
-
-    Item {
-        id: pagePool
+    ColumnLayout {
+        id: content
         anchors.fill: parent
-        visible: false
+        anchors.margins: root.margin
+        spacing: Kirigami.Units.largeSpacing
 
-        Kirigami.Page {
-            id: selectPage
-            title: selectionState.selectTitle
+        StackLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: Math.max(0, root.pages.indexOf(selectionState.page))
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: Kirigami.Units.smallSpacing * 1.5
-                spacing: Kirigami.Units.mediumSpacing
-
-                Controls.Label {
-                    text: selectionState.selectDesc
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    font.pointSize: 9.5
-                }
-
-                Controls.Frame {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Math.min(accountList.contentHeight + 4, 38 * 3)
-                    Layout.maximumHeight: 38 * 3
-                    padding: 0
-
-                    ListView {
-                        id: accountList
-                        anchors.fill: parent
-                        model: selectionState.accounts
-                        clip: true
-
-                        delegate: Controls.ItemDelegate {
-                            width: accountList.width
-                            height: 38
-                            text: modelData
-                            icon.name: "user-identity"
-
-                            onClicked: {
-                                selectionState.selectAccount(index);
-                                root.pageStack.replace(authorizePage);
-                            }
-                        }
-                    }
-                }
-
-                Item {
-                    Layout.fillHeight: true
-                }
+            SelectView {
+                selection: selectionState
+            }
+            WaitingView {}
+            FormView {
+                id: formView
+                selection: selectionState
+            }
+            FingerprintView {
+                selection: selectionState
             }
         }
 
-        Kirigami.Page {
-            id: authorizePage
-            title: selectionState.authTitle
+        Kirigami.Separator {
+            Layout.fillWidth: true
+        }
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: Kirigami.Units.smallSpacing * 1.5
-                spacing: Kirigami.Units.mediumSpacing
-
-                Controls.Label {
-                    text: selectionState.authDesc
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    font.pointSize: 9.5
-                }
-
-                Controls.TextField {
-                    id: passwordField
-                    Layout.fillWidth: true
-                    echoMode: TextInput.Password
-                    placeholderText: qsTr("Password")
-                    onAccepted: authorizePage.submitPassword()
-
-                    onVisibleChanged: {
-                        if (visible) {
-                            forceActiveFocus();
-                        }
-                    }
-                }
-
-                Controls.Label {
-                    text: selectionState.authHelper
-                    color: Kirigami.Theme.negativeTextColor
-                    visible: selectionState.isInvalid
-                    Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                }
-
-                Item {
-                    Layout.fillHeight: true
-                }
-
-                RowLayout {
-                    Layout.alignment: Qt.AlignRight
-                    Layout.topMargin: Kirigami.Units.smallSpacing
-                    spacing: Kirigami.Units.smallSpacing
-
-                    Controls.Button {
-                        text: qsTr("Authorize")
-                        highlighted: true
-                        onClicked: authorizePage.submitPassword()
-                        Kirigami.Theme.colorSet: Kirigami.Theme.Button
-                    }
-                }
-            }
-
-            function submitPassword() {
-                if (passwordField.text) {
-                    selectionState.authorize(passwordField.text);
-                    passwordField.text = "";
-                }
-            }
+        DialogFooter {
+            Layout.fillWidth: true
+            selection: selectionState
+            showAuthorize: selectionState.page === "form"
+            authorizeEnabled: selectionState.hasField && !selectionState.fieldLocked
+            onAuthorize: formView.submit()
         }
     }
 }

@@ -1,399 +1,330 @@
-use ctap_types::serde::cbor_deserialize;
-use ctap_types::webauthn::PublicKeyCredentialRpEntity;
-use gtk4::pango;
-use gtk4::prelude::*;
-use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, Entry, Image, Label, ListBox,
-    ListBoxRow, Orientation, ScrolledWindow, Stack,
-};
-use passkeyd_abi::database::layout::OtherUI;
-use passkeyd_abi::utils::CborVec;
-use serde::{Deserialize, Serialize};
-use std::cell::Cell;
-use std::io::{Read, Write};
+mod app;
+mod ipc;
+mod screen;
+mod ui;
+
+use std::cell::RefCell;
 use std::process::ExitCode;
-use std::rc::Rc;
-use zeroize::Zeroize;
 
-#[derive(Serialize, Deserialize)]
-pub struct SelectionUI {
-    pub rp: PublicKeyCredentialRpEntity,
-    pub other_uis: Vec<OtherUI>,
-    pub no_pass: bool,
-}
+use gtk4::Application;
+use gtk4::prelude::*;
 
-#[derive(Serialize)]
-pub struct SelectionResponse<'a> {
-    pub index: usize,
-    pub passphrase: &'a str,
-}
+use screen::Screen;
 
 fn main() -> ExitCode {
     passkeyd_locale::init_translations();
 
-    let mut state_buffer = Vec::new();
-    std::io::stdin().read_to_end(&mut state_buffer).unwrap_or(0);
-    let ui_data: SelectionUI = cbor_deserialize(&state_buffer).expect("Invalid CBOR");
+    // Block for the initial state before GTK starts.
+    let (init, listener) = match ipc::connect() {
+        Ok(connection) => connection,
+        Err(e) => {
+            eprintln!("passkeyd-gtk-select: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (screen, first) = match Screen::boot(init) {
+        Ok(boot) => boot,
+        Err(reason) => {
+            eprintln!("passkeyd-gtk-select: {reason}");
+            return ExitCode::FAILURE;
+        }
+    };
 
-    let rp_id = ui_data.rp.id.as_str().to_string();
+    // `connect_activate` takes an `Fn`, but the launch data is used only once.
+    let launch = RefCell::new(Some(app::Launch {
+        screen,
+        first,
+        listener,
+    }));
 
-    let select_title_str = passkeyd_locale::translate!("ui.select.select.title_bar");
-    let select_desc_str =
-        passkeyd_locale::translate!("ui.select.select.description", site => rp_id.as_str());
-    let auth_title_str = passkeyd_locale::translate!("ui.select.authorize.title_bar");
-    let auth_desc_str = passkeyd_locale::translate!("ui.select.authorize.description");
-    let auth_helper_str = passkeyd_locale::translate!("ui.select.authorize.helper_text");
-
-    let skip_selection = ui_data.other_uis.len() <= 1;
-    let skip_password = ui_data.no_pass;
-
-    if skip_selection && skip_password {
-        let mut stdout = std::io::stdout().lock();
-        let _ = stdout.write_all(&[0x02]); // Start of Text
-
-        let report = CborVec::from_serializable(
-            SelectionResponse {
-                index: 0,
-                passphrase: "",
-            },
-            std::mem::size_of::<SelectionResponse>(),
-        );
-
-        let _ = stdout.write_all(&report.into_inner());
-        let _ = stdout.flush();
-        return ExitCode::SUCCESS;
-    }
-
-    let exit_code = Rc::new(Cell::new(ExitCode::FAILURE));
-    let selected_index = Rc::new(Cell::new(0usize));
-    let retry_count = Rc::new(Cell::new(0u32));
-
-    let app = Application::builder()
+    let application = Application::builder()
         .application_id("passkeyd.ui.select")
         .build();
-
-    let exit_code_clone = exit_code.clone();
-    let selected_index_clone = selected_index.clone();
-    let retry_count_clone = retry_count.clone();
-    let other_uis = ui_data.other_uis;
-
-    app.connect_activate(move |app| {
-        let window = ApplicationWindow::builder()
-            .application(app)
-            .title(if skip_selection {
-                auth_title_str.as_ref()
-            } else {
-                select_title_str.as_ref()
-            })
-            .default_width(420)
-            .default_height(230)
-            .resizable(false)
-            .build();
-
-        let header_bar = gtk4::HeaderBar::builder().show_title_buttons(true).build();
-        window.set_titlebar(Some(&header_bar));
-
-        window.connect_close_request({
-            let app = app.clone();
-            let exit_code_clone = exit_code_clone.clone();
-            move |_| {
-                exit_code_clone.set(ExitCode::FAILURE);
-                app.quit();
-                gtk4::glib::Propagation::Stop
-            }
-        });
-
-        let stack = Stack::new();
-        stack.set_transition_type(gtk4::StackTransitionType::SlideLeftRight);
-
-        let select_box = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .margin_start(16)
-            .margin_end(16)
-            .margin_top(16)
-            .margin_bottom(16)
-            .spacing(12)
-            .build();
-
-        let select_desc_label = Label::builder()
-            .label(select_desc_str.as_ref())
-            .wrap(true)
-            .xalign(0.0)
-            .build();
-        select_box.append(&select_desc_label);
-
-        let list_box = ListBox::new();
-        list_box.add_css_class("boxed-list");
-
-        for ui in &other_uis {
-            let display_text = ui
-                .user
-                .display_name
-                .as_ref()
-                .or(ui.user.name.as_ref())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| String::from_utf8_lossy(ui.user.id.as_slice()).to_string());
-
-            let row = ListBoxRow::new();
-            row.set_cursor_from_name(Some("pointer"));
-            let row_box = GtkBox::builder()
-                .orientation(Orientation::Horizontal)
-                .spacing(12)
-                .margin_start(12)
-                .margin_end(12)
-                .margin_top(10)
-                .margin_bottom(10)
-                .build();
-
-            let icon = Image::from_icon_name("avatar-default-symbolic");
-            icon.set_pixel_size(16);
-            row_box.append(&icon);
-
-            let row_label = Label::builder()
-                .label(&display_text)
-                .xalign(0.0)
-                .hexpand(true)
-                .ellipsize(pango::EllipsizeMode::End)
-                .build();
-            row_box.append(&row_label);
-
-            row.set_child(Some(&row_box));
-            list_box.append(&row);
+    application.connect_activate(move |application| {
+        if let Some(launch) = launch.borrow_mut().take() {
+            app::start(application, launch);
         }
-
-        let scrolled_window = ScrolledWindow::builder()
-            .hscrollbar_policy(gtk4::PolicyType::Never)
-            .vscrollbar_policy(gtk4::PolicyType::Automatic)
-            .min_content_height(100)
-            .max_content_height(140)
-            .child(&list_box)
-            .build();
-
-        select_box.append(&scrolled_window);
-
-        let auth_box = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .margin_start(16)
-            .margin_end(16)
-            .margin_top(16)
-            .margin_bottom(16)
-            .spacing(12)
-            .build();
-
-        let auth_desc_label = Label::builder()
-            .label(auth_desc_str.as_ref())
-            .wrap(true)
-            .xalign(0.0)
-            .build();
-        auth_box.append(&auth_desc_label);
-
-        let password_entry = Entry::builder()
-            .visibility(false)
-            .placeholder_text("Password")
-            .hexpand(true)
-            .build();
-        auth_box.append(&password_entry);
-
-        let helper_label = Label::builder()
-            .label(auth_helper_str.as_ref())
-            .wrap(true)
-            .xalign(0.0)
-            .visible(false)
-            .build();
-        helper_label.add_css_class("error");
-        auth_box.append(&helper_label);
-
-        let spacer = GtkBox::builder().vexpand(true).build();
-        auth_box.append(&spacer);
-
-        let button_box = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .halign(Align::End)
-            .valign(Align::End)
-            .spacing(8)
-            .build();
-
-        let authorize_button = Button::builder().label("Authorize").build();
-        authorize_button.add_css_class("suggested-action");
-        authorize_button.set_cursor_from_name(Some("pointer"));
-        button_box.append(&authorize_button);
-        auth_box.append(&button_box);
-
-        stack.add_named(&select_box, Some("select"));
-        stack.add_named(&auth_box, Some("authorize"));
-
-        if skip_selection {
-            stack.set_visible_child_name("authorize");
-            window.set_title(Some(auth_title_str.as_ref()));
-        } else {
-            stack.set_visible_child_name("select");
-            window.set_title(Some(select_title_str.as_ref()));
-        }
-
-        let stack_clone = stack.clone();
-        let window_clone = window.clone();
-        let auth_title_str_clone = auth_title_str.clone();
-        let selected_index_clone2 = selected_index_clone.clone();
-        let password_entry_clone = password_entry.clone();
-
-        list_box.connect_row_activated({
-            let app = app.clone();
-            move |_, row| {
-                let idx = row.index() as usize;
-                selected_index_clone2.set(idx);
-
-                if skip_password {
-                    let mut stdout = std::io::stdout().lock();
-                    let _ = stdout.write_all(&[0x02]);
-
-                    let report = CborVec::from_serializable(
-                        SelectionResponse {
-                            index: idx,
-                            passphrase: "",
-                        },
-                        std::mem::size_of::<SelectionResponse>(),
-                    );
-
-                    let _ = stdout.write_all(&report.into_inner());
-                    let _ = stdout.flush();
-                    app.quit();
-                } else {
-                    stack_clone.set_visible_child_name("authorize");
-                    window_clone.set_title(Some(auth_title_str_clone.as_ref()));
-                    password_entry_clone.grab_focus();
-                }
-            }
-        });
-
-        let submit_password = {
-            let app = app.clone();
-            let exit_code_clone = exit_code_clone.clone();
-            let selected_index_clone = selected_index_clone.clone();
-            let retry_count_clone = retry_count_clone.clone();
-            let password_entry = password_entry.clone();
-            let helper_label = helper_label.clone();
-
-            move || {
-                let mut pwd_str = password_entry.text().to_string();
-                if pwd_str.is_empty() {
-                    return;
-                }
-
-                let login = whoami::username().expect("Failed to get username");
-                let mut client = match pam::Client::with_password("system-auth") {
-                    Ok(c) => c,
-                    Err(_) => return,
-                };
-                client.conversation_mut().set_credentials(login, &pwd_str);
-
-                let retry = retry_count_clone.get();
-                if client.authenticate().is_ok() || retry >= 3 {
-                    let idx = selected_index_clone.get();
-                    let mut stdout = std::io::stdout().lock();
-                    let _ = stdout.write_all(&[0x02]);
-
-                    let report = CborVec::from_serializable(
-                        SelectionResponse {
-                            index: idx,
-                            passphrase: &pwd_str,
-                        },
-                        std::mem::size_of::<SelectionResponse>(),
-                    );
-
-                    let _ = stdout.write_all(&report.into_inner());
-                    let _ = stdout.flush();
-
-                    pwd_str.zeroize();
-                    exit_code_clone.set(ExitCode::SUCCESS);
-                    app.quit();
-                } else {
-                    retry_count_clone.set(retry + 1);
-                    helper_label.set_visible(true);
-                    password_entry.set_text("");
-                    pwd_str.zeroize();
-                }
-            }
-        };
-
-        authorize_button.connect_clicked({
-            let submit = submit_password.clone();
-            move |_| submit()
-        });
-
-        password_entry.connect_activate({
-            let submit = submit_password.clone();
-            move |_| submit()
-        });
-
-        window.set_child(Some(&stack));
-        window.present();
     });
+    application.run_with_args::<&str>(&[]);
 
-    app.run_with_args::<&str>(&[]);
-    exit_code.get()
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use ctap_types::serde::cbor_serialize;
-    use std::{env, io::Write, path::PathBuf, process::Stdio};
+    //! Plays the core: spawns the real binary under systemd-run, writes the
+    //! initial state and `ServiceMessage`s to its stdin and reads the
+    //! `UIMessage`s it sends back on stdout, exactly like `get.rs` does.
+    //!
+    //! Interactive: needs root, a desktop session for `GUI_UID` and you at the
+    //! keyboard. There is no fingerprint reader involved, the sensor is
+    //! simulated by waiting `STEP` and then sending the result.
+    //!
+    //!   cargo test -p passkeyd-gtk-select -- --ignored --nocapture
+
+    use std::io::{Read, Write};
+    use std::path::PathBuf;
+    use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    use ctap_types::Bytes;
+    use ctap_types::serde::cbor_deserialize;
+    use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
+    use passkeyd_abi::config::Auth;
+    use passkeyd_abi::database::layout::OtherUI;
+    use passkeyd_abi::utils::{
+        CborVec, ConversationQuestion, FallbackToPasswordReason, SelectUI, ServiceMessage,
+        UIMessage,
+    };
+
+    /// The desktop user the window is shown to.
+    const GUI_UID: u32 = 1000;
+
+    /// How long every non-interactive step stays on screen. This is also the
+    /// simulated fingerprint sensor delay.
+    const STEP: Duration = Duration::from_secs(1);
+
+    const ACCOUNTS: usize = 6;
 
     #[test]
-    fn test_passkey_selection_process() {
-        let mut buffer = [0; 10000];
-        let other_uis = (0..=5)
-            .map(|idx| OtherUI {
-                site_icon: None,
-                user_icon: None,
-                user: ctap_types::webauthn::PublicKeyCredentialUserEntity {
-                    id: ctap_types::Bytes::from_slice(&[1u8; 64])
-                        .expect("Failed to create user ID"),
-                    icon: None,
-                    name: Some("Github".into()),
-                    display_name: Some(format!("acc-{idx}").as_str().into()),
-                },
-            })
-            .collect::<Vec<_>>();
+    #[ignore = "interactive: needs root, a desktop session and you clicking through the UI"]
+    fn every_screen_and_message() {
+        let mut child = spawn_ui();
+        let mut core = Core::new(&mut child);
+        core.send_state(&select_ui());
 
-        let selection_ui = SelectionUI {
+        core.scene("selection: pick an account");
+        let index = core.hear_selection();
+        println!("(picked account {index})");
+
+        core.scene("waiting: choice sent, core is busy");
+        core.pause();
+
+        core.scene("fingerprint: sensor fails twice, the third read matches");
+        core.say(ServiceMessage::AuthSelected(Auth::FPRINT));
+        core.pause();
+        core.say(ServiceMessage::Retry);
+        core.pause();
+        core.say(ServiceMessage::Retry);
+        core.pause();
+        println!("(sensor: match)");
+
+        // These are password forms, so don't type while they are on screen.
+        for reason in [
+            FallbackToPasswordReason::FingerprintDeviceUnavailable,
+            FallbackToPasswordReason::FingerprintUserUnavailable,
+            FallbackToPasswordReason::NoEnrolledFingerprints,
+            FallbackToPasswordReason::PamUnavailable,
+        ] {
+            core.scene(&format!("fallback to password: {reason:?}"));
+            core.say(ServiceMessage::FallbackToPassword(reason));
+            core.pause();
+        }
+
+        core.scene("password: type anything, the first answer is rejected, the second accepted");
+        core.say(ServiceMessage::AuthSelected(Auth::PASS));
+        core.hear_password();
+        core.say(ServiceMessage::Retry);
+        core.hear_password();
+        println!("(password: accepted)");
+        core.pause(); // the field stays locked while the core "decides"
+
+        core.scene("pam: empty form, info line, hidden prompt, error + visible prompt");
+        core.say(ServiceMessage::AuthSelected(Auth::PAM));
+        core.pause();
+        core.say(pam(ConversationQuestion::Info(
+            "Authenticating as demo-user".into(),
+        )));
+        core.pause();
+        core.say(pam(ConversationQuestion::SensitiveInput(
+            "Password:".into(),
+        )));
+        core.hear_pam_answer();
+        // Written back to back on purpose: the UI must split them.
+        core.say(pam(ConversationQuestion::Error(
+            "Permission denied, try again".into(),
+        )));
+        core.say(pam(ConversationQuestion::Input(
+            "Verification code:".into(),
+        )));
+        core.hear_pam_answer();
+        core.say(pam(ConversationQuestion::Info("Authenticated".into())));
+        core.pause();
+
+        core.scene("done: closing the pipe tells the UI to exit");
+        drop(core);
+        let status = child.wait().expect("Failed to collect UI exit status");
+        assert!(status.success(), "UI exited with {status}");
+    }
+
+    fn pam(question: ConversationQuestion) -> ServiceMessage {
+        ServiceMessage::PAMQuestion(question)
+    }
+
+    fn select_ui() -> SelectUI {
+        SelectUI {
             rp: PublicKeyCredentialRpEntity {
                 id: "github.com".into(),
                 name: Some("Github".into()),
                 icon: None,
             },
+            other_uis: (0..ACCOUNTS)
+                .map(|idx| OtherUI {
+                    site_icon: None,
+                    user_icon: None,
+                    user: PublicKeyCredentialUserEntity {
+                        id: Bytes::from_slice(&[idx as u8 + 1; 64])
+                            .expect("Failed to create user ID"),
+                        icon: None,
+                        name: Some("Github".into()),
+                        display_name: Some(format!("acc-{idx}").as_str().into()),
+                    },
+                })
+                .collect(),
             no_pass: false,
-            other_uis,
-        };
+        }
+    }
 
-        let serialized_data =
-            cbor_serialize(&selection_ui, &mut buffer[..]).expect("Serialization failed");
+    /// Builds the binary (so it is never stale) and returns its path.
+    fn ui_binary() -> PathBuf {
+        let status = Command::new(env!("CARGO"))
+            .args([
+                "build",
+                "--manifest-path",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"),
+            ])
+            .status()
+            .expect("Failed to run cargo build");
+        assert!(status.success(), "cargo build failed");
 
-        let passkeyd_select_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../target/debug/passkeyd-gtk-select");
+        // <target>/debug/deps/<this test binary>  ->  <target>/debug/passkeyd-gtk-select
+        let exe = std::env::current_exe().expect("Failed to locate the test binary");
+        exe.parent()
+            .and_then(|deps| deps.parent())
+            .expect("Unexpected test binary location")
+            .join("passkeyd-gtk-select")
+    }
 
-        let mut command = std::process::Command::new("systemd-run")
-            .arg(format!("--machine={}@", 1000))
+    fn spawn_ui() -> Child {
+        Command::new("systemd-run")
+            .arg(format!("--machine={GUI_UID}@"))
             .arg("--user")
             .arg("--collect")
             .arg("--wait")
             .arg("--quiet")
             .arg("--pipe")
-            .arg(passkeyd_select_path.as_os_str())
+            .arg(ui_binary())
             .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
             .spawn()
-            .expect("Failed to spawn UI process. Are you root?");
+            .expect("Failed to spawn UI process. Are you root?")
+    }
 
-        {
-            let mut stdin = command.stdin.take().expect("Failed to get stdin");
-            stdin
-                .write_all(&serialized_data)
-                .expect("Failed to write data into pipe");
+    /// The core's end of the pipes.
+    struct Core {
+        stdin: ChildStdin,
+        stdout: ChildStdout,
+        buf: Vec<u8>,
+    }
+
+    impl Core {
+        fn new(child: &mut Child) -> Self {
+            Self {
+                stdin: child.stdin.take().expect("Failed to get stdin"),
+                stdout: child.stdout.take().expect("Failed to get stdout"),
+                buf: Vec::new(),
+            }
         }
 
-        let result = command.wait().expect("Failed to collect UI response");
-        let exit_code = result.code().unwrap_or(1);
+        fn scene(&self, title: &str) {
+            println!("\n--- {title} ---");
+        }
 
-        assert_eq!(exit_code, 0);
+        /// Keeps the current screen up for one step.
+        fn pause(&self) {
+            sleep(STEP);
+        }
+
+        fn send_state(&mut self, state: &SelectUI) {
+            println!(
+                "[core -> ui] initial state ({} passkeys)",
+                state.other_uis.len()
+            );
+            self.write(CborVec::from_serializable(state, 1024).into_inner());
+        }
+
+        fn say(&mut self, message: ServiceMessage) {
+            println!("[core -> ui] {message:?}");
+            self.write(CborVec::from_serializable(message, 64).into_inner());
+        }
+
+        fn write(&mut self, bytes: Vec<u8>) {
+            self.stdin
+                .write_all(&bytes)
+                .and_then(|()| self.stdin.flush())
+                .expect("Failed to write into pipe. Did the UI exit?");
+        }
+
+        /// Blocks until the UI sends a whole message, like `try_ui_message` does.
+        fn hear(&mut self) -> UIMessage {
+            let mut chunk = [0u8; 512];
+            loop {
+                if let Ok(message) = cbor_deserialize::<UIMessage>(&self.buf) {
+                    self.buf.clear();
+                    println!("[ui -> core] {}", describe(&message));
+                    return message;
+                }
+                let n = self
+                    .stdout
+                    .read(&mut chunk)
+                    .expect("Failed to read from the UI");
+                assert!(
+                    n != 0,
+                    "UI closed its stdout before answering (window closed or crashed)"
+                );
+                self.buf.extend_from_slice(&chunk[..n]);
+            }
+        }
+
+        fn hear_selection(&mut self) -> usize {
+            match self.hear() {
+                UIMessage::SelectionDoneMaybeStartAuth(index) => {
+                    assert!(
+                        index < ACCOUNTS,
+                        "UI picked account {index}, only {ACCOUNTS} exist"
+                    );
+                    index
+                }
+                other => panic!("expected a selection, got {}", describe(&other)),
+            }
+        }
+
+        fn hear_password(&mut self) {
+            match self.hear() {
+                UIMessage::Password(_) => {}
+                other => panic!("expected Password, got {}", describe(&other)),
+            }
+        }
+
+        fn hear_pam_answer(&mut self) {
+            match self.hear() {
+                UIMessage::PAMAnswer(_) => {}
+                other => panic!("expected PAMAnswer, got {}", describe(&other)),
+            }
+        }
+    }
+
+    /// Secrets are never printed, only their length.
+    fn describe(message: &UIMessage) -> String {
+        match message {
+            UIMessage::SelectionDoneMaybeStartAuth(index) => {
+                format!("SelectionDoneMaybeStartAuth({index})")
+            }
+            UIMessage::Password(secret) => format!("Password(<{} chars>)", secret.chars().count()),
+            UIMessage::PAMAnswer(answer) => {
+                format!("PAMAnswer(<{} chars>)", answer.chars().count())
+            }
+        }
     }
 }

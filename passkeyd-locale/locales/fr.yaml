@@ -27,7 +27,13 @@ ui:
       title_bar: "Vérification de votre identité"
       helper_text: "Échec de l’authentification, veuillez réessayer."
       password: "Entrez votre mot de passe"
-      description: "Entrez votre mot de passe pour autoriser cette demande de clé d’accès"
+      description: "Entrez votre mot de passe pour autoriser cette demande de clé d'accès"
+      fingerprint_description: "Toucher le capteur d'empreintes pour s'authentifier"
+      fingerprint_retry: "Empreinte non reconnue, veuillez réessayer"
+      fallback_fprint_device: "Appareil d'empreintes indisponible, retour au mot de passe"
+      fallback_fprint_user: "Empreinte non configurée pour cet utilisateur, retour au mot de passe"
+      fallback_no_fprints: "Aucune empreinte enregistrée, retour au mot de passe"
+      fallback_pam: "Authentification PAM indisponible, retour au mot de passe"
 
     select:
       title_bar: "Sélectionner une clé d’accès"

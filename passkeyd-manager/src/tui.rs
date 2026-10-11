@@ -98,6 +98,7 @@ impl App {
                             &self.config,
                             passkeyd_abi::utils::UI::KeySelection,
                             confirmation,
+                            true,
                         )
                         .inner
                         .wait()

@@ -222,9 +222,13 @@ fn authorize_presence(
         button: &passkeyd_locale::translate!("passkeyd.cerds.make.presence_ui.button"),
     };
 
-    let approved = cancellable_ui(hid, channel, spawn_ui(config, UI::KeySelection, ui_data))?
-        .exit_status
-        .success();
+    let approved = cancellable_ui(
+        hid,
+        channel,
+        spawn_ui(config, UI::KeySelection, ui_data, true),
+    )?
+    .exit_status
+    .success();
 
     if !approved {
         anyhow::bail!(CtapStatus::OperationDenied);
@@ -250,12 +254,14 @@ fn authorize_selection(
         anyhow::bail!(CtapStatus::NoCredentials);
     }
 
+    let other_uis = passkeys
+        .iter()
+        .map(|passkey| passkey.credential_source.other_ui.clone())
+        .collect::<Vec<_>>();
+
     let ui_state = SelectUI {
-        rp: rp_entity,
-        other_uis: passkeys
-            .iter()
-            .map(|passkey| &passkey.credential_source.other_ui)
-            .collect(),
+        rp: rp_entity.clone(),
+        other_uis: other_uis,
         no_pass: config.no_pass,
     };
 
@@ -275,33 +281,31 @@ fn authenticate_handler(
     config: &Config,
     ui_state: SelectUI,
 ) -> anyhow::Result<usize> {
-    let mut child = spawn_ui(config, UI::KeySelect, ui_state);
+    let mut child = spawn_ui(config, UI::KeySelect, ui_state, false);
     let mut stdin = child.inner.stdin.take().unwrap();
     let mut stdout = child.inner.stdout.take().unwrap();
     let mut event_buf = Vec::new();
 
     loop {
-        if let Some(event) = try_ui_message(hid, channel, &mut child, &mut stdout, &mut event_buf)?
-        {
-            match event {
-                UIMessage::SelectionDoneMaybeStartAuth(i) => {
-                    if !config.no_pass {
-                        authorization(
-                            hid,
-                            channel,
-                            config,
-                            &mut child,
-                            &mut stdin,
-                            &mut stdout,
-                            &mut event_buf,
-                        )?;
-                    }
-                    return Ok(i);
+        match try_ui_message(hid, channel, &mut child, &mut stdout, &mut event_buf)? {
+            Some(UIMessage::SelectionDoneMaybeStartAuth(i)) => {
+                if !config.no_pass {
+                    authorization(
+                        hid,
+                        channel,
+                        config,
+                        &mut child,
+                        &mut stdin,
+                        &mut stdout,
+                        &mut event_buf,
+                    )?;
+                    let _ = child.kill();
+                    let _ = child.inner.wait();
                 }
-                _ => unreachable!(),
+                return Ok(i);
             }
-        } else {
-            std::thread::sleep(Duration::from_millis(200));
+            Some(_) => anyhow::bail!("unexpected message from the UI"),
+            None => std::thread::sleep(Duration::from_millis(200)),
         }
     }
 }
@@ -317,6 +321,7 @@ fn authorization(
     event_buf: &mut Vec<u8>,
 ) -> anyhow::Result<()> {
     let mut auth = &config.auth;
+    send_command(stdin, ServiceMessage::AuthSelected(*auth))?;
     loop {
         let auth_outcome = match auth {
             Auth::PASS => authorization_pass(hid, channel, config, child, stdin, stdout, event_buf),
@@ -623,7 +628,10 @@ fn try_ui_message(
         let mut temp_buff = [0; 512];
         loop {
             match cbor_deserialize(event_buf.as_slice()) {
-                Ok(res) => return Ok(res),
+                Ok(res) => {
+                    event_buf.clear();
+                    return Ok(res);
+                }
                 Err(_) => {
                     // If it failed probably because don't got enough bytes read more from stdout.
                     let n = stdout.read(&mut temp_buff)?;

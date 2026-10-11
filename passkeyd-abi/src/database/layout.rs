@@ -20,7 +20,7 @@ pub enum CredentialType {
     PublicKey,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct OtherUI {
     pub user: PublicKeyCredentialUserEntity,
     pub site_icon: Option<bytes::Bytes>,

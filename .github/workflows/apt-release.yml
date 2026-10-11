@@ -106,7 +106,7 @@ jobs:
           Package: passkeyd
           Architecture: amd64
           Depends: ${shlibs:Depends}, ${misc:Depends}, systemd
-          Description: An Opinionated WebAuthn Authenticator
+          Description: A WebAuthn Authenticator
            Passkeyd is a Linux based WebAuthn authenticator that works with any WebAuthn supported application, including browsers. It supports both TPM and non-TPM devices.
           EOF
 
@@ -154,6 +154,8 @@ jobs:
             # Icons
             install -Dm644 icons/32x32/passkeyd.png debian/passkeyd/usr/share/icons/hicolor/32x32/apps/passkeyd.png
             install -Dm644 icons/64x64/passkeyd.png debian/passkeyd/usr/share/icons/hicolor/64x64/apps/passkeyd.png
+
+            install -Dm644 passkeyd.pam debian/passkeyd/etc/pam.d/passkeyd
 
             # Database directory
             install -d -m 700 debian/passkeyd/var/lib/passkeyd/database

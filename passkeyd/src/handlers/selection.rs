@@ -24,6 +24,7 @@ pub fn handle(hid: &mut Ctaphid, config: &Config, channel: Channel) -> anyhow::R
                 ),
                 button: &passkeyd_locale::translate!("passkeyd.cerds.make.presence_ui.button"),
             },
+            true,
         ),
     );
 

@@ -1,7 +1,7 @@
 pkgname=passkeyd
 pkgver=1.8.0
 pkgrel=5
-pkgdesc="Opinionated WebAuthn authenticator"
+pkgdesc="A WebAuthn authenticator"
 arch=('x86_64')
 license=('GPL3')
 depends=("tpm2-tss" "systemd")

@@ -4,7 +4,7 @@ migrate:
     malfored_metadata: "Fehlerhafte Metadaten gefunden. Die Datei wurde möglicherweise aktualisiert oder beschädigt. Sie wird übersprungen. Es werden nur ältere Dateiformate unterstützt."
     malfored_passkey: "Fehlerhafter Passkey gefunden. Die Datei wurde möglicherweise aktualisiert oder beschädigt. Sie wird übersprungen. Es werden nur ältere Dateiformate unterstützt."
     migration_success: "Alter Passkey für die Website %{site}, der dem Benutzerkonto %{user_account} zugeordnet ist, wurde migriert."
-    
+
 manager:
   tui:
     confirmation:
@@ -29,6 +29,12 @@ ui:
       helper_text: "Authentifizierung fehlgeschlagen, bitte versuchen Sie es erneut."
       password: "Geben Sie Ihre Passphrase ein"
       description: "Geben Sie Ihre Passphrase ein, um diese Passkey-Anfrage zu autorisieren"
+      fingerprint_description: "Fingerabdrucksensor berühren zur Authentifizierung"
+      fingerprint_retry: "Fingerabdruck nicht erkannt, bitte erneut versuchen"
+      fallback_fprint_device: "Fingerabdrucksensor nicht verfügbar, zurück zur Passworteingabe"
+      fallback_fprint_user: "Fingerabdruck für diesen Benutzer nicht konfiguriert, zurück zur Passworteingabe"
+      fallback_no_fprints: "Keine Fingerabdrücke registriert, zurück zur Passworteingabe"
+      fallback_pam: "PAM-Authentifizierung nicht verfügbar, zurück zur Passworteingabe"
     select:
       title_bar: "Passkey auswählen"
       description: "Die Website %{site} fordert die Verwendung eines Passkeys an."

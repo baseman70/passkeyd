@@ -26,9 +26,16 @@ ui:
   select:
     authorize:
       title_bar: "Making sure it's you"
-      helper_text: "Authentication failed, try again."
-      password: "Enter your passphrase"
       description: "Enter your passphrase to authorize this passkey request"
+      password: "Enter your passphrase"
+      helper_text: "Authentication failed, try again."
+      pam_description: "PAM authentication required"
+      fingerprint_description: "Touch the fingerprint sensor to authenticate"
+      fingerprint_retry: "Fingerprint not recognized, try again"
+      fallback_fprint_device: "Fingerprint device unavailable, falling back to password"
+      fallback_fprint_user: "Fingerprint not configured for this user, falling back to password"
+      fallback_no_fprints: "No enrolled fingerprints, falling back to password"
+      fallback_pam: "PAM authentication unavailable, falling back to password"
     select:
       title_bar: "Select Passkey"
       description: "The site %{site} is requesting to use a passkey."
