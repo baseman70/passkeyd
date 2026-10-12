@@ -82,7 +82,7 @@ impl Config {
         let no_pass = config.get("NO_PASS").map(|x| x == "yes").unwrap_or(false);
 
         let auth = config
-            .get("AUTH_TYPE")
+            .get("AUTH")
             .and_then(|s| match s.to_lowercase().as_str() {
                 "fprint" | "fingerprint" => Some(Auth::FPRINT),
                 "pass" | "password" => Some(Auth::PASS),
